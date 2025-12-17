@@ -6,4 +6,7 @@ scikit-learn
 faiss-cpu
 requests
 beautifulsoup4
-sentence-transformers
+sentence-transformers==2.2.2
+torch==1.13.1+cpu
+
+
