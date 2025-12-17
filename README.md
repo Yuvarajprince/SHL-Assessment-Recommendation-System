@@ -20,8 +20,6 @@ The solution covers data collection, embedding-based retrieval, intent-aware re-
 
 ## Repository Structure
 
-```
-
 shl_recommender/
 │
 ├── api/
@@ -46,8 +44,6 @@ shl_recommender/
 │
 ├── requirements.txt
 └── README.md
-
-```
 
 ## Data Collection
 
@@ -81,11 +77,9 @@ This approach allows the system to generalize beyond keyword matching and handle
 
 The API is implemented using FastAPI and exposes the following endpoints.
 
-### Health Check
+## Health Check
 ```
-
 GET /health
-
 ```
 
 Returns service status.
