@@ -1,5 +1,5 @@
 # api/app.py
-# Safe, lightweight API – NO model loading, NO embedding generation
+# Safe, lightweight API with FAISS retrieval + correct query embeddings (CPU-only)
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -7,6 +7,7 @@ import faiss
 import pickle
 import numpy as np
 import os
+from sentence_transformers import SentenceTransformer
 
 # ---------------- APP INIT ----------------
 app = FastAPI(
@@ -14,11 +15,11 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
-    openapi_url="/openapi.json"
+    openapi_url="/openapi.json",
 )
 
 # ---------------- PATHS ----------------
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EMBEDDING_DIR = os.path.join(BASE_DIR, "embeddings")
 
 FAISS_INDEX_PATH = os.path.join(EMBEDDING_DIR, "faiss.index")
@@ -33,6 +34,12 @@ index = faiss.read_index(FAISS_INDEX_PATH)
 with open(METADATA_PATH, "rb") as f:
     metadata = pickle.load(f)
 
+# ---------------- LOAD ENCODER (CPU ONLY) ----------------
+encoder = SentenceTransformer(
+    "sentence-transformers/all-MiniLM-L6-v2",
+    device="cpu"
+)
+
 # ---------------- SCHEMAS ----------------
 class RecommendRequest(BaseModel):
     query: str
@@ -46,36 +53,29 @@ class AssessmentResponse(BaseModel):
     duration: int
     adaptive_support: str
     remote_support: str
-    test_type: list
-
-
-# ---------------- UTILS ----------------
-def simple_query_vector(query: str, dim: int) -> np.ndarray:
-    """
-    Lightweight deterministic query vector.
-    Avoids ML models completely (safe for free tiers).
-    """
-    vec = np.zeros(dim, dtype="float32")
-    for i, ch in enumerate(query.encode("utf-8")):
-        vec[i % dim] += ch
-    return vec.reshape(1, -1)
+    test_type: list[str]
 
 
 # ---------------- ENDPOINTS ----------------
-@app.get("/health")
-def health_check():
-    return {"status": "healthy"}
+@app.get("/")
+def health():
+    return {"status": "ok"}
 
 
 @app.post("/recommend", response_model=list[AssessmentResponse])
-def recommend_assessments(req: RecommendRequest):
-    if not req.query.strip():
+def recommend(request: RecommendRequest):
+    if not request.query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty")
 
-    dim = index.d
-    query_vector = simple_query_vector(req.query, dim)
+    # Encode query (MATCHES FAISS INDEX SPACE)
+    query_vector = encoder.encode(
+        request.query,
+        convert_to_numpy=True,
+        normalize_embeddings=True
+    ).reshape(1, -1)
 
-    scores, indices = index.search(query_vector, req.top_k)
+    # FAISS search
+    distances, indices = index.search(query_vector, request.top_k)
 
     results = []
     for idx in indices[0]:
@@ -92,11 +92,10 @@ def recommend_assessments(req: RecommendRequest):
             "adaptive_support": item.get("adaptive_support", "No"),
             "remote_support": item.get("remote_support", "No"),
             "test_type": (
-                item.get("test_type", [])
-                if isinstance(item.get("test_type", []), list)
-                else [item.get("test_type")]
-            )
+                item.get("test_type")
+                if isinstance(item.get("test_type"), list)
+                else [item.get("test_type", "")]
+            ),
         })
 
     return results
-
