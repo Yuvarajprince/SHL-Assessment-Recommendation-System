@@ -6,3 +6,4 @@ scikit-learn
 faiss-cpu
 requests
 beautifulsoup4
+sentence-transformers
