@@ -11,7 +11,10 @@ import os
 # ---------------- APP INIT ----------------
 app = FastAPI(
     title="SHL Assessment Recommendation API",
-    version="1.0"
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json"
 )
 
 # ---------------- PATHS ----------------
@@ -96,3 +99,4 @@ def recommend_assessments(req: RecommendRequest):
         })
 
     return results
+
