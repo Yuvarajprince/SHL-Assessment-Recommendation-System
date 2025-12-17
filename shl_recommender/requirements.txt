@@ -1,9 +1,0 @@
-fastapi
-uvicorn
-pandas
-numpy
-scikit-learn
-sentence-transformers
-faiss-cpu
-requests
-beautifulsoup4
