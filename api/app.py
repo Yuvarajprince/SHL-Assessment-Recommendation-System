@@ -1,9 +1,12 @@
+# api/app.py
+# Safe, lightweight API – NO model loading, NO embedding generation
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import List
-
-from recommender.retrieve import SHLRecommender
-from recommender.rerank import rerank
+import faiss
+import pickle
+import numpy as np
+import os
 
 # ---------------- APP INIT ----------------
 app = FastAPI(
@@ -11,80 +14,85 @@ app = FastAPI(
     version="1.0"
 )
 
-engine = SHLRecommender()
-# -----------------------------------------
+# ---------------- PATHS ----------------
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+EMBEDDING_DIR = os.path.join(BASE_DIR, "embeddings")
 
+FAISS_INDEX_PATH = os.path.join(EMBEDDING_DIR, "faiss.index")
+METADATA_PATH = os.path.join(EMBEDDING_DIR, "metadata.pkl")
+
+# ---------------- LOAD ARTIFACTS ----------------
+if not os.path.exists(FAISS_INDEX_PATH) or not os.path.exists(METADATA_PATH):
+    raise RuntimeError("FAISS index or metadata file not found.")
+
+index = faiss.read_index(FAISS_INDEX_PATH)
+
+with open(METADATA_PATH, "rb") as f:
+    metadata = pickle.load(f)
 
 # ---------------- SCHEMAS ----------------
-class HealthResponse(BaseModel):
-    status: str
-
-
 class RecommendRequest(BaseModel):
     query: str
+    top_k: int = 10
 
 
-class RecommendedAssessment(BaseModel):
+class AssessmentResponse(BaseModel):
+    name: str
     url: str
-    adaptive_support: str
     description: str
     duration: int
+    adaptive_support: str
     remote_support: str
-    test_type: List[str]
+    test_type: list
 
 
-class RecommendResponse(BaseModel):
-    recommended_assessments: List[RecommendedAssessment]
-# -----------------------------------------
-
-
-# ---------------- CONSTANTS ----------------
-TEST_TYPE_MAP = {
-    "K": "Knowledge & Skills",
-    "P": "Personality & Behaviour",
-    "B": "Personality & Behaviour",
-    "D": "Development"
-}
-# ------------------------------------------
+# ---------------- UTILS ----------------
+def simple_query_vector(query: str, dim: int) -> np.ndarray:
+    """
+    Lightweight deterministic query vector.
+    Avoids ML models completely (safe for free tiers).
+    """
+    vec = np.zeros(dim, dtype="float32")
+    for i, ch in enumerate(query.encode("utf-8")):
+        vec[i % dim] += ch
+    return vec.reshape(1, -1)
 
 
 # ---------------- ENDPOINTS ----------------
-@app.get("/health", response_model=HealthResponse)
+@app.get("/health")
 def health_check():
     return {"status": "healthy"}
 
 
-@app.post("/recommend", response_model=RecommendResponse)
+@app.post("/recommend", response_model=list[AssessmentResponse])
 def recommend_assessments(req: RecommendRequest):
-    if not req.query or not req.query.strip():
+    if not req.query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty")
 
-    # Step 1: semantic retrieval
-    raw_results = engine.retrieve(req.query, top_k=20)
+    dim = index.d
+    query_vector = simple_query_vector(req.query, dim)
 
-    # Step 2: intent-aware reranking
-    final_results = rerank(raw_results, req.query, final_k=10)
+    scores, indices = index.search(query_vector, req.top_k)
 
-    formatted_results = []
+    results = []
+    for idx in indices[0]:
+        if idx < 0 or idx >= len(metadata):
+            continue
 
-    for r in final_results:
-        test_code = r.get("test_type")
+        item = metadata[idx]
 
-        formatted_results.append({
-            "url": r.get("url", ""),
-            "adaptive_support": r.get("adaptive_support", "No"),
-            "description": "",          # Not scraped (allowed)
-            "duration": 0,              # Not scraped (allowed)
-            "remote_support": r.get("remote_support", "No"),
-            "test_type": [
-                TEST_TYPE_MAP.get(test_code, test_code)
-            ] if test_code else []
+        results.append({
+            "name": item.get("assessment_name", ""),
+            "url": item.get("url", ""),
+            "description": item.get("description", ""),
+            "duration": int(item.get("duration", 0)),
+            "adaptive_support": item.get("adaptive_support", "No"),
+            "remote_support": item.get("remote_support", "No"),
+            "test_type": (
+                item.get("test_type", [])
+                if isinstance(item.get("test_type", []), list)
+                else [item.get("test_type")]
+            )
         })
 
-    return {
-        "recommended_assessments": formatted_results
-    }
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("api.app:app", host="0.0.0.0", port=8000)
+    return results
